@@ -24,6 +24,7 @@ namespace tf {
 
 enum Domain : int {
   HOST = 0,
+  GPU,
 #ifdef TF_ENABLE_CUDA
   CUDA,
 #endif
@@ -189,6 +190,9 @@ class Node {
     const std::string& name() const;
 
     Domain domain() const;
+    void set_domain(Domain d) {
+      _domain = d;
+    }
 
   private:
 
@@ -204,6 +208,7 @@ class Node {
     Node* _parent {nullptr};
 
     int _state {0};
+    Domain _domain {Domain::HOST};
 
     std::atomic<size_t> _join_counter {0};
     
@@ -352,6 +357,9 @@ inline const std::string& Node::name() const {
 
 // Function: domain
 inline Domain Node::domain() const {
+  if (_domain != Domain::HOST) {
+    return _domain;
+  }
 
   Domain domain;
 

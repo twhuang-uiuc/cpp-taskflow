@@ -309,6 +309,10 @@ class Task {
     */
     TaskType type() const;
 
+    void set_domain(Domain d) {
+      _node->set_domain(d);
+    }
+
   private:
     
     Task(Node*);
