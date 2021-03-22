@@ -24,6 +24,8 @@ class TFProfManager;
 template <typename T>
 class Future;
 
+enum class TaskFlowPauseType;
+
 // cudaFlow
 class cudaNode;
 class cudaGraph;
@@ -41,6 +43,9 @@ class syclNode;
 class syclGraph;
 class syclTask;
 class syclFlow;
+
+
+
 
 
 }  // end of namespace tf -----------------------------------------------------

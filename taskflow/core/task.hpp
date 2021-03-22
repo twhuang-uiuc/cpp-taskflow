@@ -9,6 +9,13 @@
 
 namespace tf {
 
+  enum class TaskFlowPauseType
+  {
+    NoPause,                  //taskflow current task no pause
+    PauseContinueCurrentTask, //taskflow current task execute again when  taskflow resume 
+    PauseSkipCurrentTask,     //taskflow current task skip execute when task resume 
+  };
+
 // ----------------------------------------------------------------------------
 // Task Types
 // ----------------------------------------------------------------------------
@@ -23,6 +30,7 @@ enum class TaskType : int {
   CUDAFLOW,
   SYCLFLOW,
   STATIC,
+  PAUSABLE,
   DYNAMIC,
   CONDITION,
   MODULE,
@@ -38,6 +46,7 @@ inline constexpr std::array<TaskType, 8> TASK_TYPES = {
   TaskType::CUDAFLOW,
   TaskType::SYCLFLOW,
   TaskType::STATIC,
+  TaskType::PAUSABLE,
   TaskType::DYNAMIC,
   TaskType::CONDITION,
   TaskType::MODULE,
@@ -56,6 +65,7 @@ inline const char* to_string(TaskType type) {
     case TaskType::CUDAFLOW:    val = "cudaflow";    break;
     case TaskType::SYCLFLOW:    val = "syclflow";    break;
     case TaskType::STATIC:      val = "static";      break;
+    case TaskType::PAUSABLE:    val = "pausable";    break;
     case TaskType::DYNAMIC:     val = "subflow";     break;
     case TaskType::CONDITION:   val = "condition";   break;
     case TaskType::MODULE:      val = "module";      break;
@@ -77,7 +87,17 @@ A static task is a callable object constructible from std::function<void()>.
 */
 template <typename C>
 constexpr bool is_static_task_v = std::is_invocable_r_v<void, C> &&
-                                 !std::is_invocable_r_v<int, C>;
+!std::is_invocable_r_v<int, C> &&
+!std::is_invocable_r_v<TaskFlowPauseType,C>;
+
+/**
+@brief determines if a callable is a can pause task
+
+A can pause task is a callable object constructible from std::function<void()>.
+*/
+template <typename C>
+constexpr bool is_can_pause_task_v = std::is_invocable_r_v<TaskFlowPauseType, C> &&
+!std::is_invocable_r_v<int, C>;
 
 /**
 @brief determines if a callable is a dynamic task
@@ -437,6 +457,7 @@ inline TaskType Task::type() const {
   switch(_node->_handle.index()) {
     case Node::PLACEHOLDER:  return TaskType::PLACEHOLDER;
     case Node::STATIC:       return TaskType::STATIC;
+    case Node::PAUSABLE:     return TaskType::PAUSABLE;
     case Node::DYNAMIC:      return TaskType::DYNAMIC;
     case Node::CONDITION:    return TaskType::CONDITION;
     case Node::MODULE:       return TaskType::MODULE;
@@ -482,6 +503,10 @@ template <typename C>
 Task& Task::work(C&& c) {
   if constexpr(is_static_task_v<C>) {
     _node->_handle.emplace<Node::Static>(std::forward<C>(c));
+  }
+  else if constexpr (is_can_pause_task_v<C>)
+  {
+      _node->_handle.emplace<Node::Pausable>(std::forward<C>(c));
   }
   else if constexpr(is_dynamic_task_v<C>) {
     _node->_handle.emplace<Node::Dynamic>(std::forward<C>(c));
@@ -612,6 +637,7 @@ inline TaskType TaskView::type() const {
   switch(_node._handle.index()) {
     case Node::PLACEHOLDER:  return TaskType::PLACEHOLDER;
     case Node::STATIC:       return TaskType::STATIC;
+    case Node::PAUSABLE:     return TaskType::PAUSABLE;
     case Node::DYNAMIC:      return TaskType::DYNAMIC;
     case Node::CONDITION:    return TaskType::CONDITION;
     case Node::MODULE:       return TaskType::MODULE;

@@ -40,6 +40,11 @@ class Executor {
     @brief constructs the executor with N worker threads
     */
     explicit Executor(size_t N = std::thread::hardware_concurrency());
+
+    /**
+    @brief resume task
+    */
+    bool resumeTask(Taskflow* task);
     
     /**
     @brief destructs the executor 
@@ -239,6 +244,7 @@ class Executor {
     void _invoke_dynamic_task_internal(Worker&, Node*, Graph&, bool);
     void _invoke_dynamic_task_external(Node*, Graph&, bool);
     void _invoke_condition_task(Worker&, Node*, int&);
+    void _invoke_can_pause_task(Worker&, Node*, TaskFlowPauseType&);
     void _invoke_module_task(Worker&, Node*);
     void _invoke_async_task(Worker&, Node*);
     void _invoke_silent_async_task(Worker&, Node*);
@@ -294,6 +300,39 @@ inline Executor::~Executor() {
   
   // flush the default observer
   //_flush_tfprof();
+}
+
+inline bool Executor::resumeTask(Taskflow* task)
+{
+    bool bret = false;
+    //assert(task);
+    //assert(task->_pauseTopologies.size() == task->_pauseTopologiesStatus.size());
+    std::lock_guard<std::mutex> lock(task->_pausemtx);
+    for(auto i = 0; i<task->_pauseTopologies.size();++i)
+    {
+        auto node = task->_pauseTopologies[i];
+        if(task->_pauseTopologiesStatus[i] == TaskFlowPauseType::PauseSkipCurrentTask) // skip  node schedule
+        { 
+            const auto num_successors = node->num_successors();
+            auto& j = (node->_parent) ? node->_parent->_join_counter :
+                node->_topology->_join_counter;
+            for (size_t i = 0; i < num_successors; ++i) {
+                if (--(node->_successors[i]->_join_counter) == 0) {
+                    j.fetch_add(1);
+                    _schedule(node->_successors[i]);
+                }
+            }
+            _tear_down_invoke(node, false);
+        }
+        else //schedule node
+        {
+            _schedule(node);
+        }
+        bret = true;
+    }
+    task->_pauseTopologies.clear();
+    task->_pauseTopologiesStatus.clear();
+    return bret;
 }
 
 // Function: num_workers
@@ -651,6 +690,7 @@ inline void Executor::_invoke(Worker& worker, Node* node) {
   // access caused by topology clear.
   const auto num_successors = node->num_successors();
   
+ TaskFlowPauseType canpause{ TaskFlowPauseType::NoPause };
   // condition task
   int cond = -1;
   
@@ -660,6 +700,12 @@ inline void Executor::_invoke(Worker& worker, Node* node) {
     case Node::STATIC:{
       _invoke_static_task(worker, node);
     } 
+    break;
+    
+    // can pause task
+    case Node::PAUSABLE: {
+        _invoke_can_pause_task(worker, node, canpause);
+    }
     break;
     
     // dynamic task
@@ -734,13 +780,21 @@ inline void Executor::_invoke(Worker& worker, Node* node) {
   
   // At this point, the node storage might be destructed (to be verified)
   // case 1: non-condition task
-  if(node->_handle.index() != Node::CONDITION) {
+  if((node->_handle.index() != Node::CONDITION && node->_handle.index()!=Node::PAUSABLE) ||
+      ((node->_handle.index()==Node::PAUSABLE) && canpause==TaskFlowPauseType::NoPause)) {
     for(size_t i=0; i<num_successors; ++i) {
       if(--(node->_successors[i]->_join_counter) == 0) {
         j.fetch_add(1);
         _schedule(node->_successors[i]);
       }
     }
+  }
+  else if(node->_handle.index()==Node::PAUSABLE) //
+  {
+    std::lock_guard<std::mutex> lock(node->_topology->_taskflow._pausemtx);
+      node->_topology->_taskflow._pauseTopologies.push_back(node);
+      node->_topology->_taskflow._pauseTopologiesStatus.push_back(canpause);
+      return;
   }
   // case 2: condition task
   else {
@@ -934,6 +988,15 @@ inline void Executor::_invoke_condition_task(
   _observer_prologue(worker, node);
   cond = std::get<Node::Condition>(node->_handle).work();
   _observer_epilogue(worker, node);
+}
+
+// Procedure: _invoke_can_pause_task
+inline void Executor::_invoke_can_pause_task(
+    Worker& worker, Node* node, TaskFlowPauseType& cond
+) {
+    _observer_prologue(worker, node);
+    cond = std::get<Node::PAUSABLE>(node->_handle).work();
+    _observer_epilogue(worker, node);
 }
 
 // Procedure: _invoke_cudaflow_task
